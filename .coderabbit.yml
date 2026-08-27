@@ -1,0 +1,104 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# voltride-cart both produces contracts (consumed by voltride-orders and
+# voltride-frontend) and consumes contracts (voltride-catalog,
+# voltride-pricing) via hand-maintained local copies in src/types.ts. No
+# compiler spans the repo boundary — wire-format changes are only ever
+# caught by review.
+
+language: "en-US"
+
+tone_instructions: >-
+  Prioritize cross-repo compatibility over style. When this service's HTTP
+  contract changes, name every consumer repository and file that breaks and
+  the runtime symptom. Never rate a contract change low risk because the
+  diff is small.
+
+reviews:
+  profile: "assertive"
+  high_level_summary: true
+  request_changes_workflow: true
+
+  path_instructions:
+    - path: "**"
+      instructions: >-
+        Treat ANY change to a wire-format element this repo produces — a
+        JSON field name, field type or unit, endpoint path or method, or
+        status code — as a BREAKING CHANGE for the linked repositories, and
+        enumerate every consumer exhaustively (one broken consumer does not
+        end the analysis). The cart response (cartId,
+        items[].productId/name/quantity/basePriceCents, promoCode,
+        totals.*Cents) is decoded by coderabbit-demo/voltride-orders
+        (clients.go Cart struct — Go decodes missing JSON keys SILENTLY as
+        zero values, so a rename corrupts checkout without any error; silent
+        consumers must be named even when a louder failure exists) and by
+        coderabbit-demo/voltride-frontend (src/api/cart.ts, which also
+        depends on the 404 {"error":"cart_not_found"} body for its
+        stale-cart retry). DELETE /api/carts/:id is called by
+        voltride-orders after checkout. Severity for an unaccompanied
+        contract change is CRITICAL — the blast radius lives in other
+        repositories, so a small diff means higher risk, not lower. Semantic
+        changes (units, sign conventions) are just as breaking as renames.
+    - path: "src/types.ts"
+      instructions: >-
+        Contains this repo's local copies of the voltride-catalog /summary
+        shape and the voltride-pricing quote shape. Flag any edit that
+        drifts from what those producer repos actually serve, and any edit
+        to the produced CartResponse without coordinated consumer updates.
+    - path: "src/clients/**"
+      instructions: >-
+        HTTP clients for voltride-catalog and voltride-pricing. Verify
+        request/response field names match the producer repos exactly;
+        TypeScript cannot check this across repos.
+
+  labeling_instructions:
+    - label: "breaking-change"
+      instructions: >-
+        Apply when the PR changes any wire-format element of this service's
+        HTTP API that the linked consumer repositories decode.
+    - label: "cross-repo-impact"
+      instructions: >-
+        Apply when a change here alters the runtime behavior of another
+        VoltRide repo, even if every payload still parses.
+
+  pre_merge_checks:
+    custom_checks:
+      - name: "Cross-repo contract compatibility"
+        mode: "error"
+        instructions: >-
+          FAIL this check if the PR modifies any wire-format element this
+          service produces (JSON field name/type/unit, endpoint path/method,
+          status code, error body) or silently drifts its local copies of
+          the voltride-catalog / voltride-pricing contracts. Consumers live
+          in the linked repositories (voltride-orders, voltride-frontend)
+          and CANNOT be fixed in this PR, so a producer-side contract change
+          may only PASS when the PR description links coordinated pull
+          requests updating every affected consumer repo, or the change is
+          demonstrably additive.
+
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "AGENTS.md"
+  linked_repositories:
+    - repository: "coderabbit-demo/voltride-catalog"
+      instructions: >-
+        Producer this repo consumes: GET /api/products/:id/summary (id,
+        name, basePriceCents, category) decoded in
+        src/clients/catalogClient.ts to validate products and price items.
+    - repository: "coderabbit-demo/voltride-pricing"
+      instructions: >-
+        Producer this repo consumes: POST /api/quotes responses (all *Cents
+        totals, promoApplied) decoded in src/clients/pricingClient.ts for
+        cart totals; this repo also forwards basePriceCents and promoCode in
+        quote requests, which pricing validates strictly.
+    - repository: "coderabbit-demo/voltride-orders"
+      instructions: >-
+        Consumer of this repo's cart response (clients.go Cart struct:
+        cartId, items, promoCode) and DELETE /api/carts/:id during checkout.
+        Go decodes missing JSON keys silently as zero values.
+    - repository: "coderabbit-demo/voltride-frontend"
+      instructions: >-
+        Consumer of this repo's cart endpoints (src/api/cart.ts), including
+        the 404 cart_not_found error body used for stale-cart recovery.
